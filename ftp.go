@@ -114,6 +114,8 @@ func Dial(addr string, options ...DialOption) (*ServerConn, error) {
 		do.location = time.UTC
 	}
 
+	ensureTLSSessionCache(do)
+
 	dialFunc := do.dialFunc
 
 	if dialFunc == nil {
@@ -324,6 +326,15 @@ func DialWithContext(ctx context.Context) DialOption {
 // handshake itself (e.g. return tls.Client(conn, cfg)) — for the control
 // connection AND every data connection; the library does not add TLS on top
 // in implicit mode.
+//
+// Session resumption: many FTPS servers require the data connection to resume
+// the control connection's TLS session ("425 ... TLS session of data
+// connection not resumed", "522 Data connection must use cached TLS session").
+// When tlsConfig.ClientSessionCache is nil the library clones the config and
+// installs a per-connection cache so this works out of the box. If you set
+// ClientSessionCache yourself, you MUST provide a fresh cache for every
+// connection — a cache shared across connections can resume the wrong
+// session on the data connection, which those servers refuse.
 func DialWithTLS(tlsConfig *tls.Config) DialOption {
 	return DialOption{func(do *dialOptions) {
 		do.tlsConfig = tlsConfig
@@ -331,7 +342,9 @@ func DialWithTLS(tlsConfig *tls.Config) DialOption {
 }
 
 // DialWithExplicitTLS returns a DialOption that configures the ServerConn to be upgraded to TLS
-// See DialWithTLS for general TLS documentation
+// See DialWithTLS for general TLS documentation, including the session-cache
+// requirement for servers that demand TLS session resumption on data
+// connections.
 //
 // Unlike implicit mode, explicit (AUTH TLS) mode composes with
 // DialWithDialFunc: the dial function supplies plain TCP connections and the
@@ -665,6 +678,36 @@ func (c *ServerConn) openDataConn() (net.Conn, error) {
 		return nil, err
 	}
 	return wrapIdleConn(conn, c.options.idleTimeout), nil
+}
+
+// ensureTLSSessionCache guarantees the TLS configuration used for this
+// connection can resume sessions. Several FTPS servers (FileZilla Server,
+// proftpd with TLSOptions RequireSessionReuse, pure-ftpd) require every DATA
+// connection to resume the CONTROL connection's TLS session as an
+// anti-hijacking measure, and refuse the transfer otherwise:
+//
+//	425 Unable to build data connection: TLS session of data connection not resumed.
+//	522 Data connection must use cached TLS session
+//	(pure-ftpd simply closes the data connection -> a bare EOF)
+//
+// Go's tls package only resumes when ClientSessionCache is non-nil, which the
+// library never set — so with a default tls.Config every data connection did a
+// full handshake and those servers refused it (upstream issues #342, #435,
+// #323). Cloning avoids mutating the caller's config, and a FRESH cache per
+// Dial is deliberate: a cache shared across several ftp connections can resume
+// a *different* control connection's session on the data connection, which
+// these servers also refuse (found by rclone in #342).
+//
+// Callers that supply their own ClientSessionCache are left untouched — but
+// must likewise use a fresh cache per connection, as documented on
+// DialWithTLS / DialWithExplicitTLS.
+func ensureTLSSessionCache(do *dialOptions) {
+	if do.tlsConfig == nil || do.tlsConfig.ClientSessionCache != nil {
+		return
+	}
+	cfg := do.tlsConfig.Clone()
+	cfg.ClientSessionCache = tls.NewLRUClientSessionCache(8)
+	do.tlsConfig = cfg
 }
 
 // secureDataConn layers TLS onto a data connection obtained from a custom dial
