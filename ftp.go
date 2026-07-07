@@ -83,6 +83,7 @@ type dialOptions struct {
 	debugOutput     io.Writer
 	dialFunc        func(network, address string) (net.Conn, error)
 	shutTimeout     time.Duration // time to wait for data connection closing status
+	idleTimeout     time.Duration // per-op idle deadline on the control + data connections (0 = disabled)
 }
 
 // Entry describes a file and is returned by List().
@@ -147,6 +148,11 @@ func Dial(addr string, options ...DialOption) (*ServerConn, error) {
 		return nil, err
 	}
 
+	// Bound every control-connection read/write by the idle deadline (LOGIN,
+	// NOOP, command responses). Wrapped here so both c.conn and c.netConn — and
+	// the explicit-TLS re-wrap below — inherit it.
+	tconn = wrapIdleConn(tconn, do.idleTimeout)
+
 	// Use the resolved IP address in case addr contains a domain name
 	// If we use the domain name, we might not resolve to the same IP.
 	remoteAddr := tconn.RemoteAddr().(*net.TCPAddr)
@@ -190,6 +196,25 @@ func DialWithTimeout(timeout time.Duration) DialOption {
 func DialWithShutTimeout(shutTimeout time.Duration) DialOption {
 	return DialOption{func(do *dialOptions) {
 		do.shutTimeout = shutTimeout
+	}}
+}
+
+// DialWithIdleTimeout returns a DialOption that bounds every read and write on
+// the control AND data connections by an IDLE deadline: each operation refreshes
+// the deadline by the given duration, so a peer that stalls (no bytes moving for
+// idleTimeout) makes the blocked read/write fail with a timeout instead of
+// hanging forever. A slow-but-progressing transfer is unaffected.
+//
+// This is the missing bound on StorFrom/Retr's io.Copy — those ignore the dial
+// context, so without it a stalled server parks the transfer goroutine (and the
+// FD, and any mutex the caller holds around the transfer) indefinitely. It also
+// bounds every control command (LOGIN, NOOP, the post-transfer response read),
+// so no operation can block past idleTimeout. Because the library never reads the
+// control connection DURING a data transfer, refreshing the deadline per
+// operation never cuts a long transfer short.
+func DialWithIdleTimeout(idleTimeout time.Duration) DialOption {
+	return DialOption{func(do *dialOptions) {
+		do.idleTimeout = idleTimeout
 	}}
 }
 
@@ -574,7 +599,11 @@ func (c *ServerConn) openDataConn() (net.Conn, error) {
 
 	addr := net.JoinHostPort(host, strconv.Itoa(port))
 	if c.options.dialFunc != nil {
-		return c.options.dialFunc("tcp", addr)
+		conn, err := c.options.dialFunc("tcp", addr)
+		if err != nil {
+			return nil, err
+		}
+		return wrapIdleConn(conn, c.options.idleTimeout), nil
 	}
 
 	if c.options.tlsConfig != nil {
@@ -595,10 +624,16 @@ func (c *ServerConn) openDataConn() (net.Conn, error) {
 			return nil, err
 		}
 		tlsConn := tls.Client(conn, c.options.tlsConfig)
-		return tlsConn, nil
+		// idleConn.Handshake() forwards to the *tls.Conn, so StorFrom's
+		// zero-byte-file handshake still works through the wrapper.
+		return wrapIdleConn(tlsConn, c.options.idleTimeout), nil
 	}
 
-	return c.options.dialer.Dial("tcp", addr)
+	conn, err := c.options.dialer.Dial("tcp", addr)
+	if err != nil {
+		return nil, err
+	}
+	return wrapIdleConn(conn, c.options.idleTimeout), nil
 }
 
 // cmd is a helper function to execute a command and check for the expected FTP
