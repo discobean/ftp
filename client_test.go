@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net"
 	"net/textproto"
 	"syscall"
@@ -362,6 +363,31 @@ func TestLoginSendsCLNTWhenAdvertised(t *testing.T) {
 		t.Errorf("CLNT (%d) must be sent before OPTS UTF8 ON (%d); commands: %v",
 			clntIdx, optsIdx, mock.commands)
 	}
+}
+
+// TestChmod covers the SITE CHMOD extension (upstream issue #450).
+func TestChmod(t *testing.T) {
+	mock, c := openConn(t, "127.0.0.1")
+
+	if err := c.Chmod("file.txt", 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if mock.lastFull != "SITE CHMOD 644 file.txt" {
+		t.Errorf("wire format %q, expected %q", mock.lastFull, "SITE CHMOD 644 file.txt")
+	}
+
+	// Only the permission bits go on the wire, whatever else the mode carries.
+	if err := c.Chmod("dir", 0o2775|fs.ModeDir); err != nil {
+		t.Fatal(err)
+	}
+	if mock.lastFull != "SITE CHMOD 775 dir" {
+		t.Errorf("wire format %q, expected %q", mock.lastFull, "SITE CHMOD 775 dir")
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatal(err)
+	}
+	mock.Wait()
 }
 
 // TestQuote covers the raw-command passthrough (upstream issue #411).

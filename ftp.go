@@ -9,6 +9,7 @@ import (
 	"crypto/tls"
 	"errors"
 	"io"
+	"io/fs"
 	"net"
 	"net/textproto"
 	"strconv"
@@ -1188,6 +1189,20 @@ func (c *ServerConn) Walk(root string) *Walker {
 // close the otherwise idle connection.
 func (c *ServerConn) NoOp() error {
 	_, _, err := c.cmd(StatusCommandOK, "NOOP")
+	return err
+}
+
+// Chmod changes the permission bits of the given remote path using the
+// de-facto "SITE CHMOD" extension. It is not part of RFC 959/3659 but is
+// supported by most Unix FTP servers (proftpd, vsftpd, pure-ftpd, …); servers
+// without it refuse the command and the refusal is returned as an error.
+//
+// Only the permission bits are sent (mode.Perm(), in octal). For a remote
+// stat/lstat equivalent, see GetEntry (MLST).
+func (c *ServerConn) Chmod(path string, mode fs.FileMode) error {
+	// textproto: a one-digit expect code matches the whole response class —
+	// servers answer SITE CHMOD with 200, some with 250.
+	_, _, err := c.cmd(2, "SITE CHMOD %o %s", mode.Perm(), path)
 	return err
 }
 

@@ -285,6 +285,15 @@ func (mock *ftpMock) listen() {
 			mock.printfLine("%s", answer)
 		case "NOOP":
 			mock.printfLine("200 NOOP ok.")
+		case "SITE":
+			// Accept exactly the wire form Chmod emits: SITE CHMOD <octal> <path>
+			if len(cmdParts) == 4 && cmdParts[1] == "CHMOD" {
+				if _, err := strconv.ParseUint(cmdParts[2], 8, 32); err == nil {
+					mock.printfLine("200 SITE CHMOD command successful.")
+					break
+				}
+			}
+			mock.printfLine("500 'SITE %s': command not understood.", strings.Join(cmdParts[1:], " "))
 		case "OPTS":
 			if len(cmdParts) != 3 {
 				mock.printfLine("500 wrong number of arguments")
