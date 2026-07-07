@@ -249,6 +249,33 @@ func TestWrongLogin(t *testing.T) {
 	}
 }
 
+// TestLoginToleratesUTF8Refusal exercises upstream issue #356: a server that
+// advertises UTF8 in FEAT but refuses "OPTS UTF8 ON" (e.g. wftpserver's
+// "503 Send 'CLNT client_type' before enabling UTF8.") must not fail Login —
+// UTF8 negotiation is cosmetic.
+func TestLoginToleratesUTF8Refusal(t *testing.T) {
+	mock, err := newFtpMockExt(t, "127.0.0.1", "no-time", func(m *ftpMock) {
+		m.utf8Response = "503 Send 'CLNT client_type' before enabling UTF8."
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	c, err := DialTimeout(mock.Addr(), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Login("anonymous", "anonymous"); err != nil {
+		t.Fatalf("Login failed on a refused OPTS UTF8 ON: %s", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Errorf("can not quit: %s", err)
+	}
+}
+
 func TestDeleteDirRecur(t *testing.T) {
 	mock, c := openConn(t, "127.0.0.1")
 

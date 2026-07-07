@@ -474,27 +474,21 @@ func (c *ServerConn) setUTF8() error {
 		return nil
 	}
 
-	code, message, err := c.cmd(-1, "OPTS UTF8 ON")
+	_, _, err := c.cmd(-1, "OPTS UTF8 ON")
 	if err != nil {
+		// A transport-level failure is real and must surface.
 		return err
 	}
 
-	// Workaround for FTP servers, that does not support this option.
-	if code == StatusBadArguments || code == StatusNotImplementedParameter {
-		return nil
-	}
-
-	// The ftpd "filezilla-server" has FEAT support for UTF8, but always returns
-	// "202 UTF8 mode is always enabled. No need to send this command." when
-	// trying to use it. That's OK
-	if code == StatusCommandNotImplemented {
-		return nil
-	}
-
-	if code != StatusCommandOK {
-		return errors.New(message)
-	}
-
+	// Any refusal code is tolerated: UTF8 negotiation is cosmetic and a refusal
+	// must never abort an otherwise-successful login. Known refusals in the
+	// wild include:
+	//   - 501/504 from servers that advertise UTF8 but do not support the
+	//     option (previous workaround),
+	//   - "202 UTF8 mode is always enabled. No need to send this command."
+	//     from filezilla-server (previous workaround),
+	//   - "503 Send 'CLNT client_type' before enabling UTF8." from
+	//     wftpserver-family servers (upstream issue #356).
 	return nil
 }
 

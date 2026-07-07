@@ -17,16 +17,17 @@ import (
 )
 
 type ftpMock struct {
-	t        *testing.T
-	address  string
-	modtime  string // no-time, std-time, vsftpd
-	listener *net.TCPListener
-	proto    *textproto.Conn
-	commands []string // list of received commands
-	lastFull string   // full last command
-	rest     int
-	fileCont *bytes.Buffer
-	dataConn *mockDataConn
+	t            *testing.T
+	address      string
+	modtime      string // no-time, std-time, vsftpd
+	utf8Response string // non-empty overrides the "OPTS UTF8 ON" reply (e.g. a refusal)
+	listener     *net.TCPListener
+	proto        *textproto.Conn
+	commands     []string // list of received commands
+	lastFull     string   // full last command
+	rest         int
+	fileCont     *bytes.Buffer
+	dataConn     *mockDataConn
 	sync.WaitGroup
 }
 
@@ -36,12 +37,19 @@ func newFtpMock(t *testing.T, address string) (*ftpMock, error) {
 	return newFtpMockExt(t, address, "no-time")
 }
 
-func newFtpMockExt(t *testing.T, address, modtime string) (*ftpMock, error) {
+// newFtpMockExt builds and starts the mock. Optional opts run on the mock
+// BEFORE the listener goroutine starts, so tests can set behaviour knobs
+// without racing the connection handler.
+func newFtpMockExt(t *testing.T, address, modtime string, opts ...func(*ftpMock)) (*ftpMock, error) {
 	var err error
 	mock := &ftpMock{
 		t:       t,
 		address: address,
 		modtime: modtime,
+	}
+
+	for _, opt := range opts {
+		opt(mock)
 	}
 
 	l, err := net.Listen("tcp", address+":0")
@@ -276,7 +284,11 @@ func (mock *ftpMock) listen() {
 				break
 			}
 			if (strings.Join(cmdParts[1:], " ")) == "UTF8 ON" {
-				mock.printfLine("200 OK, UTF-8 enabled")
+				if mock.utf8Response != "" {
+					mock.printfLine("%s", mock.utf8Response)
+				} else {
+					mock.printfLine("200 OK, UTF-8 enabled")
+				}
 			}
 		case "REIN":
 			mock.printfLine("220 Logged out")
