@@ -21,6 +21,7 @@ type ftpMock struct {
 	address      string
 	modtime      string // no-time, std-time, vsftpd
 	utf8Response string // non-empty overrides the "OPTS UTF8 ON" reply (e.g. a refusal)
+	featCLNT     bool   // advertise CLNT in FEAT (wftpserver family)
 	listener     *net.TCPListener
 	proto        *textproto.Conn
 	commands     []string // list of received commands
@@ -104,8 +105,13 @@ func (mock *ftpMock) listen() {
 			case "vsftpd":
 				features += " MDTM\r\n"
 			}
+			if mock.featCLNT {
+				features += " CLNT\r\n"
+			}
 			features += "211 End"
 			mock.printfLine("%s", features)
+		case "CLNT":
+			mock.printfLine("200 Noted.")
 		case "USER":
 			if cmdParts[1] == "anonymous" {
 				mock.printfLine("331 Please send your password")

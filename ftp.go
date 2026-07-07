@@ -474,6 +474,16 @@ func (c *ServerConn) setUTF8() error {
 		return nil
 	}
 
+	// Some servers (wftpserver family) refuse "OPTS UTF8 ON" until the client
+	// has identified itself with the non-standard CLNT command ("503 Send
+	// 'CLNT client_type' before enabling UTF8.", upstream issue #356). Send it
+	// when the server advertises CLNT in FEAT — the same thing FileZilla does.
+	// Best-effort: the reply code is irrelevant, and a transport failure will
+	// surface on the very next command.
+	if _, ok := c.features["CLNT"]; ok {
+		_, _, _ = c.cmd(-1, "CLNT jlaffaye/ftp")
+	}
+
 	_, _, err := c.cmd(-1, "OPTS UTF8 ON")
 	if err != nil {
 		// A transport-level failure is real and must surface.

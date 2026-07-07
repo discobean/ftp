@@ -276,6 +276,54 @@ func TestLoginToleratesUTF8Refusal(t *testing.T) {
 	}
 }
 
+// TestLoginSendsCLNTWhenAdvertised: when the server lists CLNT in FEAT
+// (wftpserver family), the client identifies itself before OPTS UTF8 ON so
+// UTF8 is actually enabled rather than refused (upstream issue #356).
+func TestLoginSendsCLNTWhenAdvertised(t *testing.T) {
+	mock, err := newFtpMockExt(t, "127.0.0.1", "no-time", func(m *ftpMock) {
+		m.featCLNT = true
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	c, err := DialTimeout(mock.Addr(), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Login("anonymous", "anonymous"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Errorf("can not quit: %s", err)
+	}
+
+	mock.Wait()
+
+	clntIdx, optsIdx := -1, -1
+	for i, cmd := range mock.commands {
+		switch cmd {
+		case "CLNT":
+			clntIdx = i
+		case "OPTS":
+			optsIdx = i
+		}
+	}
+	if clntIdx == -1 {
+		t.Fatalf("CLNT was not sent; commands: %v", mock.commands)
+	}
+	if optsIdx == -1 {
+		t.Fatalf("OPTS was not sent; commands: %v", mock.commands)
+	}
+	if clntIdx > optsIdx {
+		t.Errorf("CLNT (%d) must be sent before OPTS UTF8 ON (%d); commands: %v",
+			clntIdx, optsIdx, mock.commands)
+	}
+}
+
 func TestDeleteDirRecur(t *testing.T) {
 	mock, c := openConn(t, "127.0.0.1")
 
