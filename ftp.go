@@ -1191,6 +1191,22 @@ func (c *ServerConn) NoOp() error {
 	return err
 }
 
+// Quote sends a raw, uninterpreted command to the server (the classic client
+// "QUOTE" feature) and returns the response code and message. Any positive
+// completion reply (2xx) is a success; other replies are returned as a
+// *textproto.Error alongside the code and message, so callers can inspect
+// exactly what the server said.
+//
+// Use it for server-specific commands the library has no method for — e.g.
+// c.Quote("SITE IDLE %d", 60) or c.Quote("FEAT").
+//
+// Commands that open a data connection (LIST, RETR, STOR, …) cannot be issued
+// through Quote; use the dedicated methods.
+func (c *ServerConn) Quote(format string, args ...interface{}) (int, string, error) {
+	// textproto: a one-digit expect code matches the whole response class (2xx).
+	return c.cmd(2, format, args...)
+}
+
 // Logout issues a REIN FTP command to logout the current user.
 func (c *ServerConn) Logout() error {
 	_, _, err := c.cmd(StatusReady, "REIN")

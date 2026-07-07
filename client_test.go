@@ -2,9 +2,11 @@ package ftp
 
 import (
 	"bytes"
+	"errors"
 	"fmt"
 	"io"
 	"net"
+	"net/textproto"
 	"syscall"
 	"testing"
 	"time"
@@ -360,6 +362,42 @@ func TestLoginSendsCLNTWhenAdvertised(t *testing.T) {
 		t.Errorf("CLNT (%d) must be sent before OPTS UTF8 ON (%d); commands: %v",
 			clntIdx, optsIdx, mock.commands)
 	}
+}
+
+// TestQuote covers the raw-command passthrough (upstream issue #411).
+func TestQuote(t *testing.T) {
+	mock, c := openConn(t, "127.0.0.1")
+
+	code, msg, err := c.Quote("NOOP")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if code != StatusCommandOK {
+		t.Errorf("code %d, expected %d", code, StatusCommandOK)
+	}
+	if msg == "" {
+		t.Error("expected a non-empty response message")
+	}
+
+	// A refused command surfaces the server's code + text as a textproto.Error.
+	code, _, err = c.Quote("BOGUS")
+	if err == nil {
+		t.Fatal("expected an error for an unknown command")
+	}
+	if code != StatusBadCommand {
+		t.Errorf("code %d, expected %d", code, StatusBadCommand)
+	}
+	var protoErr *textproto.Error
+	if !errors.As(err, &protoErr) {
+		t.Errorf("expected a *textproto.Error, got %T", err)
+	} else if protoErr.Code != StatusBadCommand {
+		t.Errorf("textproto code %d, expected %d", protoErr.Code, StatusBadCommand)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatal(err)
+	}
+	mock.Wait()
 }
 
 func TestDeleteDirRecur(t *testing.T) {
