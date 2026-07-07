@@ -318,7 +318,11 @@ func DialWithContext(ctx context.Context) DialOption {
 //
 // If called together with the DialWithDialFunc option, the DialWithDialFunc function
 // will be used when dialing new connections but regardless of the function,
-// the connection will be treated as a TLS connection.
+// the connection will be treated as a TLS connection. In that combination your
+// dial function owns the connection end-to-end and MUST perform the TLS
+// handshake itself (e.g. return tls.Client(conn, cfg)) — for the control
+// connection AND every data connection; the library does not add TLS on top
+// in implicit mode.
 func DialWithTLS(tlsConfig *tls.Config) DialOption {
 	return DialOption{func(do *dialOptions) {
 		do.tlsConfig = tlsConfig
@@ -327,6 +331,11 @@ func DialWithTLS(tlsConfig *tls.Config) DialOption {
 
 // DialWithExplicitTLS returns a DialOption that configures the ServerConn to be upgraded to TLS
 // See DialWithTLS for general TLS documentation
+//
+// Unlike implicit mode, explicit (AUTH TLS) mode composes with
+// DialWithDialFunc: the dial function supplies plain TCP connections and the
+// library performs the TLS upgrade itself on both the control connection and
+// every data connection.
 func DialWithExplicitTLS(tlsConfig *tls.Config) DialOption {
 	return DialOption{func(do *dialOptions) {
 		do.explicitTLS = true
@@ -624,7 +633,7 @@ func (c *ServerConn) openDataConn() (net.Conn, error) {
 		if err != nil {
 			return nil, err
 		}
-		return wrapIdleConn(conn, c.options.idleTimeout), nil
+		return wrapIdleConn(secureDataConn(conn, c.options), c.options.idleTimeout), nil
 	}
 
 	if c.options.tlsConfig != nil {
@@ -655,6 +664,30 @@ func (c *ServerConn) openDataConn() (net.Conn, error) {
 		return nil, err
 	}
 	return wrapIdleConn(conn, c.options.idleTimeout), nil
+}
+
+// secureDataConn layers TLS onto a data connection obtained from a custom dial
+// function when the LIBRARY owns the TLS upgrade — i.e. explicit (AUTH TLS)
+// mode. Without this, DialWithDialFunc + DialWithExplicitTLS produced a TLS
+// control connection but CLEARTEXT data connections: after PROT P the server
+// waits for a TLS handshake on the data connection that never comes, so the
+// first List/Stor/Retr hangs forever (upstream issue #425).
+//
+// Implicit mode (DialWithTLS + a dial func) is deliberately NOT wrapped: there
+// the dial func owns the connection end-to-end and must perform the TLS
+// handshake itself (as documented on DialWithTLS) — wrapping here would
+// double-TLS those callers.
+//
+// The handshake is lazy (first Read/Write), matching the non-dialFunc TLS
+// branch in openDataConn — see the proftpd/pureftpd note there.
+func secureDataConn(conn net.Conn, opts *dialOptions) net.Conn {
+	if conn == nil {
+		return nil
+	}
+	if opts.dialFunc != nil && opts.tlsConfig != nil && opts.explicitTLS {
+		return tls.Client(conn, opts.tlsConfig)
+	}
+	return conn
 }
 
 // cmd is a helper function to execute a command and check for the expected FTP

@@ -2,6 +2,7 @@ package ftp
 
 import (
 	"bytes"
+	"crypto/tls"
 	"errors"
 	"io"
 	"net"
@@ -304,6 +305,48 @@ func (mock *ftpMock) listen() {
 		default:
 			mock.printfLine("500 Unknown command %s.", cmdParts[0])
 		}
+	}
+}
+
+// TestSecureDataConn exercises upstream issue #425: with a custom dial func +
+// explicit TLS, data connections must be TLS-wrapped by the library (the
+// control connection already is, via the AUTH TLS upgrade in Dial). Implicit
+// mode and non-TLS setups must pass the dial func's connection through
+// untouched.
+func TestSecureDataConn(t *testing.T) {
+	a, b := net.Pipe()
+	defer func() {
+		assert.NoError(t, a.Close())
+		assert.NoError(t, b.Close())
+	}()
+
+	dialFunc := func(network, address string) (net.Conn, error) { return nil, nil }
+	tlsConfig := &tls.Config{InsecureSkipVerify: true} //nolint:gosec // test fixture, no real peer
+
+	// explicit TLS + dial func: the library owns the TLS upgrade -> wrapped
+	wrapped := secureDataConn(a, &dialOptions{dialFunc: dialFunc, tlsConfig: tlsConfig, explicitTLS: true})
+	if _, ok := wrapped.(*tls.Conn); !ok {
+		t.Errorf("explicit TLS + dialFunc: expected *tls.Conn, got %T", wrapped)
+	}
+
+	// implicit TLS + dial func: the dial func owns TLS -> untouched
+	if got := secureDataConn(a, &dialOptions{dialFunc: dialFunc, tlsConfig: tlsConfig, explicitTLS: false}); got != a {
+		t.Errorf("implicit TLS + dialFunc: expected the conn untouched, got %T", got)
+	}
+
+	// no TLS config -> untouched
+	if got := secureDataConn(a, &dialOptions{dialFunc: dialFunc, explicitTLS: true}); got != a {
+		t.Errorf("no tlsConfig: expected the conn untouched, got %T", got)
+	}
+
+	// no dial func -> untouched (the regular openDataConn TLS branch handles it)
+	if got := secureDataConn(a, &dialOptions{tlsConfig: tlsConfig, explicitTLS: true}); got != a {
+		t.Errorf("no dialFunc: expected the conn untouched, got %T", got)
+	}
+
+	// nil conn passes through
+	if got := secureDataConn(nil, &dialOptions{}); got != nil {
+		t.Errorf("nil conn: expected nil, got %T", got)
 	}
 }
 
