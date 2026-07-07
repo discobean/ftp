@@ -60,3 +60,33 @@ defer r.Close()
 buf, err := ioutil.ReadAll(r)
 println(string(buf))
 ```
+
+## Error handling ##
+
+Errors at the protocol level — every non-success reply from the server — are
+returned as a [`*textproto.Error`](https://pkg.go.dev/net/textproto#Error),
+whose `Code` field carries the three-digit FTP reply code and `Msg` the
+server's text. Use `errors.As` to detect the cause of a failure:
+
+```go
+err = c.Login("user", "wrong-password")
+
+var protoErr *textproto.Error
+if errors.As(err, &protoErr) {
+    switch protoErr.Code {
+    case ftp.StatusNotLoggedIn: // 530
+        log.Fatal("bad credentials")
+    case ftp.StatusFileUnavailable: // 550
+        log.Fatal("no such file or permission denied")
+    default:
+        log.Fatalf("server refused: %d %s", protoErr.Code, protoErr.Msg)
+    }
+}
+```
+
+The `ftp.Status*` constants (see `status.go`) name every standard reply code,
+so comparisons never need magic numbers. Errors that are not
+`*textproto.Error` are transport-level failures (dial, timeout, TLS,
+connection reset) from the underlying `net` layer and can be inspected the
+usual way (`errors.As` with `net.Error`, `errors.Is(err, os.ErrDeadlineExceeded)`,
+…).
