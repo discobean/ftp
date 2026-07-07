@@ -144,6 +144,25 @@ func testConn(t *testing.T, disableEPSV bool) {
 		t.Errorf("entry name %q, expected %q", entry.Name, "multiline-dir")
 	}
 
+	// A server padding the MLST entry line with several leading spaces
+	// (upstream issue #338) must still parse.
+	entry, err = c.GetEntry("leading-space-file")
+	if err != nil {
+		t.Error(err)
+	}
+	if entry == nil {
+		t.Fatal("expected entry, got nil")
+	}
+	if entry.Size != 42 {
+		t.Errorf("entry size %d, expected %d", entry.Size, 42)
+	}
+	if entry.Type != EntryTypeFile {
+		t.Errorf("entry type %q, expected %q", entry.Type, EntryTypeFile)
+	}
+	if entry.Name != "leading-space-file" {
+		t.Errorf("entry name %q, expected %q", entry.Name, "leading-space-file")
+	}
+
 	err = c.Delete("tset")
 	assert.NoError(err)
 

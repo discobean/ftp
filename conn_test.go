@@ -191,6 +191,11 @@ func (mock *ftpMock) listen() {
 		case "MLST":
 			if cmdParts[1] == "multiline-dir" {
 				mock.printfLine("250-File data\r\n Type=dir;Size=0; multiline-dir\r\n Modify=20201213202400; multiline-dir\r\n250 End")
+			} else if cmdParts[1] == "leading-space-file" {
+				// Some servers (e.g. WS_FTP 8.6.1) pad the entry line with
+				// several leading spaces instead of the single space RFC 3659
+				// mandates (upstream issue #338).
+				mock.printfLine("250-File data\r\n    Type=file;Size=42;Modify=20201213202400; leading-space-file\r\n250 End")
 			} else {
 				mock.printfLine("250-File data\r\n Type=file;Size=42;Modify=20201213202400; magic-file\r\n \r\n250 End")
 			}

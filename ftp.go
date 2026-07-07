@@ -814,12 +814,11 @@ func (c *ServerConn) GetEntry(path string) (entry *Entry, err error) {
 
 	e := &Entry{}
 	for _, l := range lines[1 : lc-1] {
-		// According to RFC 3659, the entry lines must start with a space when passed over the
-		// control connection. Some servers don't seem to add that space though. Both forms are
-		// accepted here.
-		if len(l) > 0 && l[0] == ' ' {
-			l = l[1:]
-		}
+		// According to RFC 3659, the entry lines must start with a single space
+		// when passed over the control connection. Some servers don't add that
+		// space, and others (e.g. WS_FTP 8.6.1) pad with several spaces — all
+		// forms are accepted here, so trim however many spaces are present.
+		l = strings.TrimLeft(l, " ")
 		// Some severs seem to send a blank line at the end which we ignore
 		if l == "" {
 			continue
