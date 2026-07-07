@@ -153,6 +153,17 @@ func Dial(addr string, options ...DialOption) (*ServerConn, error) {
 	// the explicit-TLS re-wrap below — inherit it.
 	tconn = wrapIdleConn(tconn, do.idleTimeout)
 
+	// DialWithTimeout historically bounded only the TCP connect; the greeting
+	// read below (and the AUTH TLS exchange) had no deadline, so a server that
+	// accepts the connection but never sends a 220 (a non-FTP service, a
+	// half-dead server) hung Dial forever (upstream issue #256). Bound the
+	// whole pre-session exchange by the same timeout; cleared before returning
+	// so established-session reads keep their historical behaviour (or the
+	// idle deadline when DialWithIdleTimeout is set).
+	if do.dialer.Timeout > 0 {
+		_ = tconn.SetDeadline(time.Now().Add(do.dialer.Timeout))
+	}
+
 	// Use the resolved IP address in case addr contains a domain name
 	// If we use the domain name, we might not resolve to the same IP.
 	remoteAddr := tconn.RemoteAddr().(*net.TCPAddr)
@@ -178,6 +189,12 @@ func Dial(addr string, options ...DialOption) (*ServerConn, error) {
 		}
 		tconn = tls.Client(tconn, do.tlsConfig)
 		c.conn = textproto.NewConn(do.wrapConn(tconn))
+	}
+
+	// Clear the greeting deadline (SetDeadline forwards through the TLS and
+	// idle-timeout wrappers to the socket).
+	if do.dialer.Timeout > 0 {
+		_ = tconn.SetDeadline(time.Time{})
 	}
 
 	return c, nil

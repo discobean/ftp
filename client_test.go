@@ -226,6 +226,44 @@ func TestTimeout(t *testing.T) {
 	}
 }
 
+// TestTimeoutBoundsGreeting exercises upstream issue #256: a server that
+// accepts the TCP connection but never sends the 220 greeting (a non-FTP
+// service, a half-dead server) must not hang Dial forever — DialWithTimeout
+// bounds the greeting read, not just the TCP connect.
+func TestTimeoutBoundsGreeting(t *testing.T) {
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer ln.Close()
+
+	accepted := make(chan net.Conn, 1)
+	go func() {
+		conn, err := ln.Accept()
+		if err != nil {
+			return
+		}
+		accepted <- conn // hold it open, never send a greeting
+	}()
+	defer func() {
+		select {
+		case conn := <-accepted:
+			_ = conn.Close()
+		default:
+		}
+	}()
+
+	start := time.Now()
+	c, err := Dial(ln.Addr().String(), DialWithTimeout(500*time.Millisecond))
+	if err == nil {
+		_ = c.Quit()
+		t.Fatal("expected a timeout error, got nil")
+	}
+	if elapsed := time.Since(start); elapsed > 5*time.Second {
+		t.Fatalf("Dial did not time out promptly: %v", elapsed)
+	}
+}
+
 func TestWrongLogin(t *testing.T) {
 	mock, err := newFtpMock(t, "127.0.0.1")
 	if err != nil {
