@@ -365,6 +365,50 @@ func TestLoginSendsCLNTWhenAdvertised(t *testing.T) {
 	}
 }
 
+// TestSkipPASVAddress covers upstream issue #305: a NAT'd/misconfigured server
+// advertises an address in the PASV reply that the client cannot reach, and
+// whose class matches the control host so isBogusDataIP cannot catch it (here:
+// 127.0.0.2 advertised, listener on 127.0.0.1 — both loopback). With
+// DialWithSkipPASVAddress the data connection dials the control host instead
+// and the transfer works; only the port is taken from the reply.
+func TestSkipPASVAddress(t *testing.T) {
+	mock, err := newFtpMockExt(t, "127.0.0.1", "no-time", func(m *ftpMock) {
+		m.pasvHost = "127,0,0,2"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	c, err := Dial(mock.Addr(),
+		DialWithTimeout(5*time.Second),
+		DialWithDisabledEPSV(true), // force PASV so the advertised host matters
+		DialWithSkipPASVAddress(true),
+	)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Login("anonymous", "anonymous"); err != nil {
+		t.Fatal(err)
+	}
+
+	// Any data-connection command proves the point: it only succeeds if the
+	// client ignored 127.0.0.2 and dialed the control host.
+	entries, err := c.List("")
+	if err != nil {
+		t.Fatalf("List over PASV with a bogus advertised host failed: %s", err)
+	}
+	if len(entries) == 0 {
+		t.Error("expected list entries")
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatal(err)
+	}
+	mock.Wait()
+}
+
 // TestChmod covers the SITE CHMOD extension (upstream issue #450).
 func TestChmod(t *testing.T) {
 	mock, c := openConn(t, "127.0.0.1")

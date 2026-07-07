@@ -85,6 +85,7 @@ type dialOptions struct {
 	dialFunc        func(network, address string) (net.Conn, error)
 	shutTimeout     time.Duration // time to wait for data connection closing status
 	idleTimeout     time.Duration // per-op idle deadline on the control + data connections (0 = disabled)
+	skipPASVAddress bool          // ignore the PASV-advertised host, always use the control host
 }
 
 // Entry describes a file and is returned by List().
@@ -216,6 +217,31 @@ func DialWithTimeout(timeout time.Duration) DialOption {
 func DialWithShutTimeout(shutTimeout time.Duration) DialOption {
 	return DialOption{func(do *dialOptions) {
 		do.shutTimeout = shutTimeout
+	}}
+}
+
+// DialWithSkipPASVAddress returns a DialOption that makes passive mode ignore
+// the host advertised in the server's PASV reply and always dial the data
+// connection to the CONTROL connection's host (only the port is taken from the
+// reply) — the equivalent of curl's --ftp-skip-pasv-ip and FileZilla's "Use
+// server address instead".
+//
+// Misconfigured or NAT'd servers advertise an internal address in the 227
+// reply ("227 Entering Passive Mode (172,19,...)"), which is unreachable from
+// outside. The library's default already falls back to the control host when
+// the advertised address is OBVIOUSLY bogus (multicast, private-vs-public or
+// loopback mismatch — see isBogusDataIP), but it cannot detect a wrong address
+// of the same class, e.g. a server reached over a VPN on one private range
+// advertising a different private range (upstream issue #305). This option
+// covers those setups explicitly.
+//
+// It only affects PASV; EPSV (RFC 2428) never carries a host and always uses
+// the control host. Do not set it for the rare multi-homed server that
+// legitimately serves data connections from a different address than the
+// control connection.
+func DialWithSkipPASVAddress(skip bool) DialOption {
+	return DialOption{func(do *dialOptions) {
+		do.skipPASVAddress = skip
 	}}
 }
 
@@ -596,6 +622,13 @@ func (c *ServerConn) pasv() (host string, port int, err error) {
 
 	// Recompose port
 	port = portPart1*256 + portPart2
+
+	// The caller opted out of trusting the advertised host entirely (NAT'd /
+	// misconfigured servers whose wrong address isBogusDataIP can't detect —
+	// see DialWithSkipPASVAddress). Only the port is taken from the reply.
+	if c.options.skipPASVAddress {
+		return c.host, port, nil
+	}
 
 	// Make the IP address to connect to
 	host = strings.Join(pasvData[0:4], ".")
