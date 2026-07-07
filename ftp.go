@@ -23,6 +23,14 @@ const (
 	DefaultDialTimeout = 30 * time.Second
 )
 
+// DefaultShutTimeout bounds the wait for the data-connection closing status
+// when Response.Close is called and no DialWithShutTimeout was configured.
+// After the client closes the data connection the server's 226/426 arrives
+// promptly; waiting forever turned a partially-read download into a
+// permanently hung Close (upstream issue #214). A variable (not an option)
+// so it can be tuned process-wide; set it before opening connections.
+var DefaultShutTimeout = 30 * time.Second
+
 // EntryType describes the different types of an Entry.
 type EntryType int
 
@@ -1095,9 +1103,46 @@ func (c *ServerConn) checkDataShut() error {
 		if err := c.netConn.SetDeadline(shutDeadline); err != nil {
 			return err
 		}
+		// The deadline must not outlive this read: left armed, it would fail
+		// every control-connection operation once it expires (the connection
+		// looked poisoned after the first transfer + shutTimeout elapsed).
+		defer func() { _ = c.netConn.SetDeadline(time.Time{}) }()
 	}
 	_, _, err := c.conn.ReadResponse(StatusClosingDataConnection)
 	return err
+}
+
+// checkDataClose reads the transfer status after Response.Close tore down the
+// data connection — possibly MID-transfer. It differs from checkDataShut in
+// two ways, both because an early close is a normal way to consume a partial
+// download (upstream issue #214):
+//
+//   - The wait is ALWAYS bounded. A server that keeps pumping the aborted
+//     transfer (or says nothing at all) used to park Close forever when no
+//     DialWithShutTimeout was configured; without a bound the only recourse
+//     was draining the whole file before closing.
+//   - A "426 Transfer aborted" reply is expected and NOT an error — it is the
+//     server correctly reporting the early close. 226 (server finished the
+//     send before noticing) and 225 are equally fine.
+func (c *ServerConn) checkDataClose() error {
+	shut := c.options.shutTimeout
+	if shut == 0 {
+		shut = DefaultShutTimeout
+	}
+	if err := c.netConn.SetDeadline(time.Now().Add(shut)); err != nil {
+		return err
+	}
+	defer func() { _ = c.netConn.SetDeadline(time.Time{}) }()
+
+	code, msg, err := c.conn.ReadResponse(-1)
+	if err != nil {
+		return err
+	}
+	switch code {
+	case StatusClosingDataConnection, StatusDataConnectionOpen, StatusTransfertAborted:
+		return nil
+	}
+	return &textproto.Error{Code: code, Msg: msg}
 }
 
 // StorFrom issues a STOR FTP command to store a file to the remote FTP server.
@@ -1338,7 +1383,7 @@ func (r *Response) Close() error {
 		errs = append(errs, err)
 	}
 
-	if err := r.c.checkDataShut(); err != nil {
+	if err := r.c.checkDataClose(); err != nil {
 		errs = append(errs, err)
 	}
 

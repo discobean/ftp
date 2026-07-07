@@ -365,6 +365,115 @@ func TestLoginSendsCLNTWhenAdvertised(t *testing.T) {
 	}
 }
 
+// TestResponseCloseTolerates426 covers half of upstream issue #214: closing a
+// download early makes the server report "426 Transfer aborted", which is the
+// EXPECTED outcome of an early close, not an error.
+func TestResponseCloseTolerates426(t *testing.T) {
+	mock, err := newFtpMockExt(t, "127.0.0.1", "no-time", func(m *ftpMock) {
+		m.retrFinal = "426 Transfer aborted. Link to file server lost."
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	c, err := DialTimeout(mock.Addr(), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Login("anonymous", "anonymous"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Stor("f", bytes.NewBufferString("partial download content")); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := c.Retr("f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	buf := make([]byte, 1)
+	if _, err := r.Read(buf); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Close(); err != nil {
+		t.Fatalf("Close after a partial read must tolerate 426, got: %s", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatal(err)
+	}
+	mock.Wait()
+}
+
+// TestResponseCloseDefaultDeadline covers the other half of upstream issue
+// #214: a server that never reports the closing status must not hang
+// Response.Close forever — the wait is bounded by DefaultShutTimeout even when
+// no DialWithShutTimeout was configured.
+func TestResponseCloseDefaultDeadline(t *testing.T) {
+	oldDefault := DefaultShutTimeout
+	DefaultShutTimeout = 300 * time.Millisecond
+	defer func() { DefaultShutTimeout = oldDefault }()
+
+	mock, err := newFtpMockExt(t, "127.0.0.1", "no-time", func(m *ftpMock) {
+		m.retrFinal = "NONE"
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	c, err := DialTimeout(mock.Addr(), 5*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Login("anonymous", "anonymous"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Stor("f", bytes.NewBufferString("content")); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := c.Retr("f")
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	start := time.Now()
+	err = r.Close()
+	if err == nil {
+		t.Fatal("expected a timeout error from Close, got nil")
+	}
+	if elapsed := time.Since(start); elapsed > 3*time.Second {
+		t.Fatalf("Close did not time out promptly: %v", elapsed)
+	}
+}
+
+// TestShutTimeoutDeadlineCleared: the shutTimeout deadline armed while reading
+// a transfer's closing status must not stay on the control connection — left
+// armed, it failed every later command once it expired.
+func TestShutTimeoutDeadlineCleared(t *testing.T) {
+	mock, c := openConn(t, "127.0.0.1", DialWithShutTimeout(300*time.Millisecond))
+
+	if err := c.Stor("f", bytes.NewBufferString("content")); err != nil {
+		t.Fatal(err)
+	}
+
+	// Let the shut deadline expire, then use the control connection again.
+	time.Sleep(400 * time.Millisecond)
+
+	if err := c.NoOp(); err != nil {
+		t.Fatalf("control connection unusable after the shut deadline expired: %s", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatal(err)
+	}
+	mock.Wait()
+}
+
 // TestSkipPASVAddress covers upstream issue #305: a NAT'd/misconfigured server
 // advertises an address in the PASV reply that the client cannot reach, and
 // whose class matches the control host so isBogusDataIP cannot catch it (here:

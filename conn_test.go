@@ -24,6 +24,7 @@ type ftpMock struct {
 	utf8Response string // non-empty overrides the "OPTS UTF8 ON" reply (e.g. a refusal)
 	featCLNT     bool   // advertise CLNT in FEAT (wftpserver family)
 	pasvHost     string // non-empty advertises this comma-form host in the PASV reply (NAT misconfig)
+	retrFinal    string // RETR closing status: "" = 226, "NONE" = say nothing, else sent verbatim
 	listener     *net.TCPListener
 	proto        *textproto.Conn
 	commands     []string // list of received commands
@@ -240,7 +241,15 @@ func (mock *ftpMock) listen() {
 			mock.printfLine("150 Opening ASCII mode data connection for file list")
 			mock.dataConn.write(mock.fileCont.Bytes()[mock.rest:])
 			mock.rest = 0
-			mock.printfLine("226 Transfer complete")
+			switch mock.retrFinal {
+			case "":
+				mock.printfLine("226 Transfer complete")
+			case "NONE":
+				// Say nothing: simulates a server that never reports the
+				// closing status (upstream issue #214).
+			default:
+				mock.printfLine("%s", mock.retrFinal)
+			}
 			mock.closeDataConn()
 		case "RNFR":
 			mock.printfLine("350 File or directory exists, ready for destination name")
