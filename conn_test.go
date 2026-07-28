@@ -25,6 +25,9 @@ type ftpMock struct {
 	featCLNT     bool   // advertise CLNT in FEAT (wftpserver family)
 	pasvHost     string // non-empty advertises this comma-form host in the PASV reply (NAT misconfig)
 	retrFinal    string // RETR closing status: "" = 226, "NONE" = say nothing, else sent verbatim
+	dataSilent   bool   // PASV/EPSV never reply: parks the client in a control read (ForceClose tests)
+	storMode     string // "" = drain normally; "drip" = read slowly so the client's copy parks
+	dripDouble   bool   // drip only: report the abort with TWO replies (426 then 226) like some servers
 	listener     *net.TCPListener
 	proto        *textproto.Conn
 	commands     []string // list of received commands
@@ -90,7 +93,12 @@ func (mock *ftpMock) listen() {
 	mock.printfLine("220 FTP Server ready.")
 
 	for {
-		fullCommand, _ := mock.proto.ReadLine()
+		fullCommand, err := mock.proto.ReadLine()
+		if err != nil {
+			// The client tore the control connection down without QUIT (e.g.
+			// ForceClose): stop serving instead of spinning on a dead conn.
+			return
+		}
 		mock.lastFull = fullCommand
 
 		cmdParts := strings.Split(fullCommand, " ")
@@ -152,6 +160,10 @@ func (mock *ftpMock) listen() {
 				mock.printfLine("550 Could not get file size.")
 			}
 		case "PASV":
+			if mock.dataSilent {
+				// Say nothing: the client parks reading this reply forever.
+				break
+			}
 			p, err := mock.listenDataConn()
 			if err != nil {
 				mock.printfLine("451 %s.", err)
@@ -167,6 +179,10 @@ func (mock *ftpMock) listen() {
 			}
 			mock.printfLine("227 Entering Passive Mode (%s,%d,%d).", pasvHost, p1, p2)
 		case "EPSV":
+			if mock.dataSilent {
+				// Say nothing: the client parks reading this reply forever.
+				break
+			}
 			p, err := mock.listenDataConn()
 			if err != nil {
 				mock.printfLine("451 %s.", err)
@@ -176,6 +192,28 @@ func (mock *ftpMock) listen() {
 		case "STOR":
 			if mock.dataConn == nil {
 				mock.printfLine("425 Unable to build data connection: Connection refused")
+				break
+			}
+			if mock.storMode == "drip" {
+				// Read the data connection far slower than the client writes
+				// (32 KiB per 50 ms) so its io.Copy parks in a data-conn Write
+				// once the TCP buffers fill. When the client force-closes the
+				// data conn, the remaining buffer drains in a few ticks, the
+				// read hits EOF, and we report the abort like a real server.
+				mock.printfLine("150 please send")
+				mock.dataConn.Wait()
+				buf := make([]byte, 32*1024)
+				for {
+					if _, err := mock.dataConn.conn.Read(buf); err != nil {
+						break
+					}
+					time.Sleep(50 * time.Millisecond)
+				}
+				mock.printfLine("426 Transfer aborted")
+				if mock.dripDouble {
+					mock.printfLine("226 Closing data connection")
+				}
+				mock.closeDataConn()
 				break
 			}
 			mock.printfLine("150 please send")

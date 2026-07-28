@@ -1151,43 +1151,9 @@ func (c *ServerConn) checkDataClose() error {
 //
 // Hint: io.Pipe() can be used if an io.Writer is required.
 func (c *ServerConn) StorFrom(path string, r io.Reader, offset uint64) error {
-	conn, err := c.cmdDataConnFrom(offset, "STOR %s", path)
-	if err != nil {
-		return err
-	}
-
-	var errs []error
-
-	// if the upload fails we still need to try to read the server
-	// response otherwise if the failure is not due to a connection problem,
-	// for example the server denied the upload for quota limits, we miss
-	// the response and we cannot use the connection to send other commands.
-	if n, err := io.Copy(conn, r); err != nil {
-		errs = append(errs, err)
-	} else if n == 0 {
-		// If we wrote no bytes and got no error, make sure we call
-		// tls.Handshake on the connection as it won't get called
-		// unless Write() is called. (See comment in openDataConn()).
-		//
-		// ProFTP doesn't like this and returns "Unable to build data
-		// connection: Operation not permitted" when trying to upload
-		// an empty file without this.
-		if do, ok := conn.(interface{ Handshake() error }); ok {
-			if err := do.Handshake(); err != nil {
-				errs = append(errs, err)
-			}
-		}
-	}
-
-	if err := conn.Close(); err != nil {
-		errs = append(errs, err)
-	}
-
-	if err := c.checkDataShut(); err != nil {
-		errs = append(errs, err)
-	}
-
-	return errors.Join(errs...)
+	// context.Background() can never cancel, so this is the historical
+	// StorFrom behaviour exactly — see storFromContext (storcontext.go).
+	return c.storFromContext(context.Background(), path, r, offset)
 }
 
 // Append issues a APPE FTP command to store a file to the remote FTP server.

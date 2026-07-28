@@ -50,6 +50,12 @@ func (c *idleConn) Write(b []byte) (int, error) {
 	return c.Conn.Write(b)
 }
 
+// NetConn returns the wrapped connection, mirroring (*tls.Conn).NetConn, so
+// ForceClose's rawestConn can unwrap through the idle layer to the socket.
+func (c *idleConn) NetConn() net.Conn {
+	return c.Conn
+}
+
 // Handshake forwards to the wrapped connection when it supports one (a
 // *tls.Conn), preserving StorFrom's explicit zero-byte-file TLS handshake. The
 // idle deadline is applied first so a stalled handshake is bounded too.
