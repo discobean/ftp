@@ -69,8 +69,10 @@ func parseNextRFC3659ListLine(line string, loc *time.Location, e *Entry) (*Entry
 			switch value {
 			case "dir", "cdir", "pdir":
 				e.Type = EntryTypeFolder
+				e.TypeSet = true
 			case "file":
 				e.Type = EntryTypeFile
+				e.TypeSet = true
 			}
 		case "size":
 			if err := e.setSize(value); err != nil {

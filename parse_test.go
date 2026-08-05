@@ -192,3 +192,29 @@ func newTime(year int, month time.Month, day int, hourMinSec ...int) time.Time {
 
 	return time.Date(year, month, day, hour, min, sec, 0, time.UTC)
 }
+
+// TypeSet must be true only when the parser actually determined the type —
+// EntryTypeFile is the zero value, so an MLSx line with an absent or
+// unrecognised "type" fact would otherwise masquerade as a real file (and a
+// strict existence probe could accept a directory as a completed file).
+func TestRFC3659TypeSet(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		line    string
+		typeSet bool
+	}{
+		{"type=file;size=8; music.mp3", true},
+		{"type=dir;modify=20150813224845; music", true},
+		{"size=8;modify=20150813224845; noType.bin", false},          // no type fact
+		{"type=OS.unix=slink:/foo;size=8; weird", false},             // unrecognised value
+	}
+	for _, c := range cases {
+		e, err := parseRFC3659ListLine(c.line, now, time.UTC)
+		if err != nil {
+			t.Fatalf("%q: %v", c.line, err)
+		}
+		if e.TypeSet != c.typeSet {
+			t.Errorf("%q: TypeSet = %v, want %v", c.line, e.TypeSet, c.typeSet)
+		}
+	}
+}

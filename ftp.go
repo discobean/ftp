@@ -105,6 +105,14 @@ type Entry struct {
 	Type   EntryType
 	Size   uint64
 	Time   time.Time
+	// TypeSet reports whether Type was actually determined by the listing
+	// parser. EntryTypeFile is the zero value, so without this bit an MLSx line
+	// whose "type" fact is absent or unrecognised is indistinguishable from a
+	// real file — a hazard for callers that make decisions on Type (e.g. an
+	// existence probe accepting a directory as a completed file). The classic
+	// LIST parsers always derive a type from the mode/dir column and set it;
+	// only MLSx can leave it false.
+	TypeSet bool
 }
 
 // Response represents a data-connection
@@ -928,7 +936,20 @@ func (c *ServerConn) List(path string) (entries []*Entry, err error) {
 	for scanner.Scan() {
 		entry, errParse := parser(scanner.Text(), now, c.options.location)
 		if errParse == nil {
-			entries = append(entries, entry)
+			if cmd != "MLSD" {
+				// Every classic-LIST parser derives the type from the mode/dir
+				// column as part of a successful parse; only MLSx can succeed
+				// with the type genuinely undetermined.
+				entry.TypeSet = true
+			}
+			if strictParse && !entry.TypeSet {
+				// The "type" fact was absent or unrecognised; Type is the zero
+				// value (file) by accident, not by information. A strict caller
+				// must not act on it.
+				errs = append(errs, fmt.Errorf("MLSD line without a usable type fact %q", scanner.Text()))
+			} else {
+				entries = append(entries, entry)
+			}
 		} else if strictParse {
 			errs = append(errs, fmt.Errorf("unparseable MLSD line %q: %w", scanner.Text(), errParse))
 		}
