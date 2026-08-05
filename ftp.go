@@ -8,6 +8,7 @@ import (
 	"context"
 	"crypto/tls"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net"
@@ -94,6 +95,7 @@ type dialOptions struct {
 	shutTimeout     time.Duration // time to wait for data connection closing status
 	idleTimeout     time.Duration // per-op idle deadline on the control + data connections (0 = disabled)
 	skipPASVAddress bool          // ignore the PASV-advertised host, always use the control host
+	strictTransfers bool          // 426 on data close = error; MLSD parse failures = error
 }
 
 // Entry describes a file and is returned by List().
@@ -225,6 +227,27 @@ func DialWithTimeout(timeout time.Duration) DialOption {
 func DialWithShutTimeout(shutTimeout time.Duration) DialOption {
 	return DialOption{func(do *dialOptions) {
 		do.shutTimeout = shutTimeout
+	}}
+}
+
+// DialWithStrictDataTransfers returns a DialOption for consumers that always
+// read a transfer to EOF (e.g. a polling PULL client downloading whole files):
+//   - a final "426 Transfer aborted" on data-connection close becomes an ERROR
+//     instead of being tolerated. The default tolerance exists for callers that
+//     deliberately close a download early (426 is the server correctly
+//     reporting that early close); a strict consumer never closes early, so a
+//     426 always means the transfer really was truncated — without this option
+//     io.Copy sees a clean EOF and a short file looks like a success.
+//   - MLSD listing lines that fail to parse become an ERROR instead of being
+//     silently dropped. MLSD (RFC 3659) is machine-readable — a healthy server
+//     emits only parseable lines, so a dropped line means a damaged listing,
+//     and a caller using the listing as an existence probe would mistake a
+//     partial listing for definitive absence. (Classic LIST fallback keeps
+//     dropping unparseable lines even in strict mode: human-format LIST output
+//     legitimately contains noise like "total 5" summary lines.)
+func DialWithStrictDataTransfers(strict bool) DialOption {
+	return DialOption{func(do *dialOptions) {
+		do.strictTransfers = strict
 	}}
 }
 
@@ -895,12 +918,19 @@ func (c *ServerConn) List(path string) (entries []*Entry, err error) {
 
 	r := &Response{conn: conn, c: c}
 
+	// Under MLSD every line is machine-readable, so in strict mode a parse
+	// failure is a damaged listing, not tolerable noise. LIST output keeps its
+	// drop-unparseable behaviour regardless (see DialWithStrictDataTransfers).
+	strictParse := c.options.strictTransfers && cmd == "MLSD"
+
 	scanner := bufio.NewScanner(c.options.wrapStream(r))
 	now := time.Now()
 	for scanner.Scan() {
 		entry, errParse := parser(scanner.Text(), now, c.options.location)
 		if errParse == nil {
 			entries = append(entries, entry)
+		} else if strictParse {
+			errs = append(errs, fmt.Errorf("unparseable MLSD line %q: %w", scanner.Text(), errParse))
 		}
 	}
 
@@ -1139,7 +1169,16 @@ func (c *ServerConn) checkDataClose() error {
 		return err
 	}
 	switch code {
-	case StatusClosingDataConnection, StatusDataConnectionOpen, StatusTransfertAborted:
+	case StatusClosingDataConnection, StatusDataConnectionOpen:
+		return nil
+	case StatusTransfertAborted:
+		// Tolerated by default (an intentionally early-closed download makes the
+		// server report 426 — that is correct behaviour, not a failure). A
+		// strict consumer never closes early, so for it 426 always means the
+		// transfer was genuinely truncated.
+		if c.options.strictTransfers {
+			return &textproto.Error{Code: code, Msg: msg}
+		}
 		return nil
 	}
 	return &textproto.Error{Code: code, Msg: msg}

@@ -766,3 +766,51 @@ func TestDialWithDialer(t *testing.T) {
 
 	assert.Equal(t, true, dialerCalled)
 }
+
+// TestStrictDataTransfers426IsError is the pull-consumer counterpart of
+// TestResponseCloseTolerates426: a consumer that always reads to EOF opts in
+// via DialWithStrictDataTransfers, and for it a final "426 Transfer aborted"
+// means the transfer was genuinely truncated — Close MUST surface it. Without
+// this, io.Copy sees a clean EOF and a short file reads as a success.
+func TestStrictDataTransfers426IsError(t *testing.T) {
+	mock, err := newFtpMockExt(t, "127.0.0.1", "no-time", func(m *ftpMock) {
+		m.retrFinal = "426 Transfer aborted. Link to file server lost."
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	c, err := Dial(mock.Addr(), DialWithTimeout(5*time.Second), DialWithStrictDataTransfers(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Login("anonymous", "anonymous"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := c.Stor("f", bytes.NewBufferString("truncated download content")); err != nil {
+		t.Fatal(err)
+	}
+
+	r, err := c.Retr("f")
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Read to EOF like a real pull consumer — the mock still finishes with 426.
+	if _, err := io.ReadAll(r); err != nil {
+		t.Fatal(err)
+	}
+	err = r.Close()
+	if err == nil {
+		t.Fatal("strict mode: Close after a 426 completion must be an error")
+	}
+	var tperr *textproto.Error
+	if !errors.As(err, &tperr) || tperr.Code != StatusTransfertAborted {
+		t.Fatalf("want textproto 426, got: %v", err)
+	}
+
+	if err := c.Quit(); err != nil {
+		t.Fatal(err)
+	}
+}
