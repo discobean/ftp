@@ -111,6 +111,10 @@ func TestParseValidListLine(t *testing.T) {
 				assert.Equal(lt.entryType, entry.Type)
 				assert.Equal(lt.size, entry.Size)
 				assert.Equal(lt.time, entry.Time)
+				// Every recognized classic entry DERIVED its type — TypeSet must
+				// say so, or strict consumers will skip real files (the two
+				// early-return branches in parseLsListLine once missed this).
+				assert.True(entry.TypeSet, "TypeSet must be true for a recognized entry")
 			}
 		})
 	}

@@ -103,8 +103,9 @@ func parseLsListLine(line string, now time.Time, loc *time.Location) (*Entry, er
 
 	if fields[1] == "folder" && fields[2] == "0" {
 		e := &Entry{
-			Type: EntryTypeFolder,
-			Name: scanner.Remaining(),
+			Type:    EntryTypeFolder,
+			TypeSet: true,
+			Name:    scanner.Remaining(),
 		}
 		if err := e.setTime(fields[3:6], now, loc); err != nil {
 			return nil, err
@@ -116,8 +117,9 @@ func parseLsListLine(line string, now time.Time, loc *time.Location) (*Entry, er
 	if fields[1] == "0" {
 		fields = append(fields, scanner.Next())
 		e := &Entry{
-			Type: EntryTypeFile,
-			Name: scanner.Remaining(),
+			Type:    EntryTypeFile,
+			TypeSet: true,
+			Name:    scanner.Remaining(),
 		}
 
 		if err := e.setSize(fields[2]); err != nil {
