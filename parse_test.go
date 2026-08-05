@@ -205,8 +205,8 @@ func TestRFC3659TypeSet(t *testing.T) {
 	}{
 		{"type=file;size=8; music.mp3", true},
 		{"type=dir;modify=20150813224845; music", true},
-		{"size=8;modify=20150813224845; noType.bin", false},          // no type fact
-		{"type=OS.unix=slink:/foo;size=8; weird", false},             // unrecognised value
+		{"size=8;modify=20150813224845; noType.bin", false}, // no type fact
+		{"type=OS.unix=slink:/foo;size=8; weird", false},    // unrecognised value
 	}
 	for _, c := range cases {
 		e, err := parseRFC3659ListLine(c.line, now, time.UTC)

@@ -259,6 +259,28 @@ func DialWithStrictDataTransfers(strict bool) DialOption {
 	}}
 }
 
+// DataTransferError wraps an error that occurred AFTER the server accepted a
+// data transfer (150/125) — a scanner failure or a completion-status error on
+// close. At that point the control connection may hold an UNCONSUMED second
+// reply (some servers report an abort as "426" followed by "226"; only the
+// first is consumed), so the next command would read the wrong reply. Callers
+// that reuse sessions should treat a DataTransferError as session-fatal and
+// reconnect. Errors from the command/handshake phase (e.g. a 450/550 refusing
+// the listing) are NOT wrapped: no transfer began, the channel is still in
+// sync.
+type DataTransferError struct{ Err error }
+
+func (e *DataTransferError) Error() string { return e.Err.Error() }
+func (e *DataTransferError) Unwrap() error { return e.Err }
+
+// wrapDataTransferErr marks post-acceptance errors; nil stays nil.
+func wrapDataTransferErr(err error) error {
+	if err == nil {
+		return nil
+	}
+	return &DataTransferError{Err: err}
+}
+
 // DialWithSkipPASVAddress returns a DialOption that makes passive mode ignore
 // the host advertised in the server's PASV reply and always dial the data
 // connection to the CONTROL connection's host (only the port is taken from the
@@ -894,7 +916,7 @@ func (c *ServerConn) NameList(path string) (entries []string, err error) {
 		errs = append(errs, err)
 	}
 
-	return entries, errors.Join(errs...)
+	return entries, wrapDataTransferErr(errors.Join(errs...))
 }
 
 // List issues a LIST FTP command.
@@ -936,20 +958,13 @@ func (c *ServerConn) List(path string) (entries []*Entry, err error) {
 	for scanner.Scan() {
 		entry, errParse := parser(scanner.Text(), now, c.options.location)
 		if errParse == nil {
-			if cmd != "MLSD" {
-				// Every classic-LIST parser derives the type from the mode/dir
-				// column as part of a successful parse; only MLSx can succeed
-				// with the type genuinely undetermined.
-				entry.TypeSet = true
-			}
-			if strictParse && !entry.TypeSet {
-				// The "type" fact was absent or unrecognised; Type is the zero
-				// value (file) by accident, not by information. A strict caller
-				// must not act on it.
-				errs = append(errs, fmt.Errorf("MLSD line without a usable type fact %q", scanner.Text()))
-			} else {
-				entries = append(entries, entry)
-			}
+			// NOTE a WELL-FORMED entry whose type could not be determined (an
+			// MLSx line with an absent or OS-specific type fact — reachable via
+			// MLSD or via classic LIST, whose dispatcher tries the MLSx parser
+			// first) is KEPT, with TypeSet=false. Strict callers filter on
+			// TypeSet; erroring the whole listing here would let one exotic
+			// entry (a symlink, a socket) disable every sibling file.
+			entries = append(entries, entry)
 		} else if strictParse {
 			errs = append(errs, fmt.Errorf("unparseable MLSD line %q: %w", scanner.Text(), errParse))
 		}
@@ -962,7 +977,7 @@ func (c *ServerConn) List(path string) (entries []*Entry, err error) {
 		errs = append(errs, err)
 	}
 
-	return entries, errors.Join(errs...)
+	return entries, wrapDataTransferErr(errors.Join(errs...))
 }
 
 // GetEntry issues a MLST FTP command which retrieves one single Entry using the

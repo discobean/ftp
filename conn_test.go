@@ -25,6 +25,7 @@ type ftpMock struct {
 	featCLNT     bool   // advertise CLNT in FEAT (wftpserver family)
 	pasvHost     string // non-empty advertises this comma-form host in the PASV reply (NAT misconfig)
 	retrFinal    string // RETR closing status: "" = 226, "NONE" = say nothing, else sent verbatim
+	listFinal    string // final reply for LIST/NLST (default "226 Transfer complete")
 	dataSilent   bool   // PASV/EPSV never reply: parks the client in a control read (ForceClose tests)
 	storMode     string // "" = drain normally; "drip" = read slowly so the client's copy parks
 	dripDouble   bool   // drip only: report the abort with TWO replies (426 then 226) like some servers
@@ -234,7 +235,11 @@ func (mock *ftpMock) listen() {
 			mock.dataConn.Wait()
 			mock.printfLine("150 Opening ASCII mode data connection for file list")
 			mock.dataConn.write([]byte("-rw-r--r--   1 ftp      wheel           0 Jan 29 10:29 lo\r\ntotal 1"))
-			mock.printfLine("226 Transfer complete")
+			if mock.listFinal != "" {
+				mock.printfLine("%s", mock.listFinal)
+			} else {
+				mock.printfLine("226 Transfer complete")
+			}
 			mock.closeDataConn()
 		case "MLSD":
 			if mock.dataConn == nil {
@@ -245,7 +250,11 @@ func (mock *ftpMock) listen() {
 			mock.dataConn.Wait()
 			mock.printfLine("150 Opening data connection for file list")
 			mock.dataConn.write([]byte("Type=file;Size=0;Modify=20201213202400; lo\r\n"))
-			mock.printfLine("226 Transfer complete")
+			if mock.listFinal != "" {
+				mock.printfLine("%s", mock.listFinal)
+			} else {
+				mock.printfLine("226 Transfer complete")
+			}
 			mock.closeDataConn()
 		case "MLST":
 			if cmdParts[1] == "multiline-dir" {
@@ -267,7 +276,11 @@ func (mock *ftpMock) listen() {
 			mock.dataConn.Wait()
 			mock.printfLine("150 Opening ASCII mode data connection for file list")
 			mock.dataConn.write([]byte("/incoming"))
-			mock.printfLine("226 Transfer complete")
+			if mock.listFinal != "" {
+				mock.printfLine("%s", mock.listFinal)
+			} else {
+				mock.printfLine("226 Transfer complete")
+			}
 			mock.closeDataConn()
 		case "RETR":
 			if mock.dataConn == nil {

@@ -814,3 +814,72 @@ func TestStrictDataTransfers426IsError(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+// TestStrictListing426IsDataTransferError: a listing whose transfer was
+// accepted and then aborted (426) must, in strict mode, surface an error that
+// errors.As-matches *DataTransferError — the caller's signal that the control
+// connection may hold an unconsumed second reply and the session must not be
+// reused. A pre-transfer refusal is NOT wrapped (no transfer began).
+func TestStrictListing426IsDataTransferError(t *testing.T) {
+	mock, err := newFtpMockExt(t, "127.0.0.1", "no-time", func(m *ftpMock) {
+		m.listFinal = "426 Transfer aborted. Link to file server lost."
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer mock.Close()
+
+	c, err := Dial(mock.Addr(), DialWithTimeout(5*time.Second), DialWithStrictDataTransfers(true))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := c.Login("anonymous", "anonymous"); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = c.NameList("/")
+	if err == nil {
+		t.Fatal("strict mode: NLST ending in 426 must error")
+	}
+	var dte *DataTransferError
+	if !errors.As(err, &dte) {
+		t.Fatalf("want DataTransferError, got: %T %v", err, err)
+	}
+
+	_, err = c.List("/")
+	if err == nil {
+		t.Fatal("strict mode: LIST ending in 426 must error")
+	}
+	if !errors.As(err, &dte) {
+		t.Fatalf("want DataTransferError from List, got: %T %v", err, err)
+	}
+}
+
+// TestClassicListMLSxCrossoverTypeSet pins the round-3 P1: the classic-LIST
+// dispatcher tries the MLSx parser FIRST, so an MLSx-shaped line arriving via
+// LIST can parse successfully with the type genuinely undetermined. TypeSet
+// must be false for it — it must NOT be laundered into a trusted "file" — while
+// real ls/DOS lines carry TypeSet=true from their parsers.
+func TestClassicListMLSxCrossoverTypeSet(t *testing.T) {
+	now := time.Now()
+	cases := []struct {
+		line    string
+		typeSet bool
+	}{
+		{"size=8;modify=20150813224845; viaList.bin", false},                       // MLSx shape, no type fact
+		{"type=OS.unix=slink:/foo;size=8; weird", false},                           // MLSx shape, OS-specific type
+		{"-rw-r--r--   1 ftp      wheel          42 Jan 29 10:29 real.txt", true},  // ls
+		{"drwxr-xr-x   1 ftp      wheel           0 Jan 29 10:29 realdir", true},   // ls dir
+		{"06-14-11  02:31PM       211 file.txt", true},                             // DOS file
+		{"06-14-11  02:31PM <DIR> folder", true},                                   // DOS dir
+	}
+	for _, c := range cases {
+		e, err := parseListLine(c.line, now, time.UTC)
+		if err != nil {
+			t.Fatalf("%q: %v", c.line, err)
+		}
+		if e.TypeSet != c.typeSet {
+			t.Errorf("%q: TypeSet = %v, want %v", c.line, e.TypeSet, c.typeSet)
+		}
+	}
+}

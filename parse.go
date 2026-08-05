@@ -158,6 +158,9 @@ func parseLsListLine(line string, now time.Time, loc *time.Location) (*Entry, er
 	default:
 		return nil, errUnknownListEntryType
 	}
+	// Every arm above derived the type from the mode character (the default arm
+	// rejects), so a successful parse always has a REAL type.
+	e.TypeSet = true
 
 	if err := e.setTime(fields[5:8], now, loc); err != nil {
 		return nil, err
@@ -190,6 +193,7 @@ func parseDirListLine(line string, now time.Time, loc *time.Location) (*Entry, e
 	line = strings.TrimLeft(line, " ")
 	if strings.HasPrefix(line, "<DIR>") {
 		e.Type = EntryTypeFolder
+		e.TypeSet = true
 		line = strings.TrimPrefix(line, "<DIR>")
 	} else {
 		space := strings.Index(line, " ")
@@ -201,6 +205,7 @@ func parseDirListLine(line string, now time.Time, loc *time.Location) (*Entry, e
 			return nil, errUnsupportedListLine
 		}
 		e.Type = EntryTypeFile
+		e.TypeSet = true
 		line = line[space:]
 	}
 
