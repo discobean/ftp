@@ -25,6 +25,7 @@ type ftpMock struct {
 	featCLNT     bool   // advertise CLNT in FEAT (wftpserver family)
 	pasvHost     string // non-empty advertises this comma-form host in the PASV reply (NAT misconfig)
 	retrFinal    string // RETR closing status: "" = 226, "NONE" = say nothing, else sent verbatim
+	retrMode     string // "" = send fileCont normally; "drip" = write slowly forever so a download only ends by data-conn close
 	listFinal    string // final reply for LIST/NLST (default "226 Transfer complete")
 	dataSilent   bool   // PASV/EPSV never reply: parks the client in a control read (ForceClose tests)
 	storMode     string // "" = drain normally; "drip" = read slowly so the client's copy parks
@@ -285,6 +286,29 @@ func (mock *ftpMock) listen() {
 		case "RETR":
 			if mock.dataConn == nil {
 				mock.printfLine("425 Unable to build data connection: Connection refused")
+				break
+			}
+
+			if mock.retrMode == "drip" {
+				// Write the data connection slowly and WITHOUT END (32 KiB per
+				// 50 ms) — a client download of this file can only finish
+				// because something closed the data connection under it. The
+				// write errors once the client force-closes, and we report the
+				// abort like a real server.
+				mock.printfLine("150 sending slowly")
+				mock.dataConn.Wait()
+				buf := make([]byte, 32*1024)
+				for {
+					if _, err := mock.dataConn.conn.Write(buf); err != nil {
+						break
+					}
+					time.Sleep(50 * time.Millisecond)
+				}
+				mock.printfLine("426 Transfer aborted")
+				if mock.dripDouble {
+					mock.printfLine("226 Closing data connection")
+				}
+				mock.closeDataConn()
 				break
 			}
 
