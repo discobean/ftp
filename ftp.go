@@ -113,6 +113,12 @@ type Entry struct {
 	// LIST parsers always derive a type from the mode/dir column and set it;
 	// only MLSx can leave it false.
 	TypeSet bool
+	// TimePrecision is the granularity of Time as parsed from the listing:
+	// time.Second for MLSx modify facts, time.Minute for ls-style lines with
+	// an HH:MM column, 24h for ls-style lines carrying only a date, and 0
+	// when no time was determined. Consumers that reason about file age can
+	// bound the parse error instead of guessing the format.
+	TimePrecision time.Duration
 }
 
 // Response represents a data-connection

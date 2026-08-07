@@ -222,3 +222,33 @@ func TestRFC3659TypeSet(t *testing.T) {
 		}
 	}
 }
+
+// TimePrecision lets age-reasoning consumers bound the parse error instead of
+// guessing which listing format produced a time.
+func TestTimePrecision(t *testing.T) {
+	now := time.Date(2026, 8, 7, 12, 0, 0, 0, time.UTC)
+
+	e, err := parseListLine("-rw-r--r-- 1 u g 1234 Aug  7 09:30 recent.csv", now, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.TimePrecision != time.Minute {
+		t.Fatalf("hh:mm line precision = %v, want minute", e.TimePrecision)
+	}
+
+	e, err = parseListLine("-rw-r--r-- 1 u g 1234 Aug  7 2025 old.csv", now, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.TimePrecision != 24*time.Hour {
+		t.Fatalf("year line precision = %v, want 24h", e.TimePrecision)
+	}
+
+	e, err = parseRFC3659ListLine("modify=20260807093015;type=file;size=5; mlsd.csv", now, time.UTC)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if e.TimePrecision != time.Second {
+		t.Fatalf("MLSx precision = %v, want second", e.TimePrecision)
+	}
+}

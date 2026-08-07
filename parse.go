@@ -62,6 +62,7 @@ func parseNextRFC3659ListLine(line string, loc *time.Location, e *Entry) (*Entry
 		case "modify":
 			var err error
 			e.Time, err = time.ParseInLocation("20060102150405", value, loc)
+			e.TimePrecision = time.Second
 			if err != nil {
 				return nil, err
 			}
@@ -182,6 +183,7 @@ func parseDirListLine(line string, now time.Time, loc *time.Location) (*Entry, e
 		if len(line) > len(format) {
 			e.Time, err = time.ParseInLocation(format, line[:len(format)], loc)
 			if err == nil {
+				e.TimePrecision = time.Minute // DIR formats carry hh:mm
 				line = line[len(format):]
 				break
 			}
@@ -274,6 +276,7 @@ func (e *Entry) setTime(fields []string, now time.Time, loc *time.Location) (err
 		if !e.Time.Before(now.AddDate(0, 6, 0)) {
 			e.Time = e.Time.AddDate(-1, 0, 0)
 		}
+		e.TimePrecision = time.Minute
 
 	} else { // only the date
 		if len(fields[2]) != 4 {
@@ -281,6 +284,7 @@ func (e *Entry) setTime(fields []string, now time.Time, loc *time.Location) (err
 		}
 		timeStr := fmt.Sprintf("%s %s %s 00:00", fields[1], fields[0], fields[2])
 		e.Time, err = time.ParseInLocation("_2 Jan 2006 15:04", timeStr, loc)
+		e.TimePrecision = 24 * time.Hour
 	}
 	return
 }
